@@ -31,9 +31,35 @@ import {
   refreshBalance,
   relativeTime,
   saveConfig,
+  setApiKey,
 } from "./balance"
 
 const BRAND = "#4D6BFE"
+
+// 所有可能抛错的原生读取都包一层，保证界面不会因为读配置/钥匙串失败而白屏
+function safeConfig() {
+  try {
+    return loadConfig()
+  } catch (e) {
+    return { host: "https://api.deepseek.com", currency: "auto", refreshMinutes: 30, hideBreakdown: false, lowThreshold: 10 }
+  }
+}
+
+function safeHasKey(): boolean {
+  try {
+    return hasApiKey()
+  } catch (e) {
+    return false
+  }
+}
+
+function safeKeyLabel(): string {
+  try {
+    return maskApiKey(getApiKey())
+  } catch (e) {
+    return "读取失败"
+  }
+}
 
 function InfoRow({
   label,
@@ -57,9 +83,10 @@ function InfoRow({
 function SettingsView() {
   const dismiss = Navigation.useDismiss()
 
-  const [config, setConfig] = useState(loadConfig())
+  const [config, setConfig] = useState(safeConfig())
   const [keyInput, setKeyInput] = useState("")
-  const [keySaved, setKeySaved] = useState(hasApiKey())
+  const [keySaved, setKeySaved] = useState(safeHasKey())
+  const [keyLabel, setKeyLabel] = useState(safeKeyLabel())
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState("")
   const [tone, setTone] = useState("secondaryLabel")
@@ -86,7 +113,12 @@ function SettingsView() {
   }
 
   async function doRefresh() {
-    const key = getApiKey()
+    let key = ""
+    try {
+      key = getApiKey()
+    } catch (e) {
+      key = ""
+    }
     if (!key) {
       setStatus("请先保存 API Key")
       setTone("systemOrange")
@@ -117,6 +149,7 @@ function SettingsView() {
     if (!value) return
     const ok = setApiKey(value)
     setKeySaved(ok)
+    setKeyLabel(safeKeyLabel())
     setKeyInput("")
     setStatus(ok ? "API Key 已保存到钥匙串" : "保存失败")
     setTone(ok ? "systemGreen" : "systemRed")
@@ -125,6 +158,7 @@ function SettingsView() {
   function removeKey() {
     clearApiKey()
     setKeySaved(false)
+    setKeyLabel(safeKeyLabel())
     setInfos([])
     setUpdatedAt(0)
     setFetchedAt(0)
@@ -193,7 +227,7 @@ function SettingsView() {
       >
         <InfoRow
           label={"当前 Key"}
-          value={maskApiKey(getApiKey())}
+          value={keyLabel}
           color={keySaved ? "systemGreen" : "systemOrange"}
         />
         <SecureField
@@ -317,9 +351,29 @@ function SettingsView() {
 }
 
 async function run() {
-  await Navigation.present({
-    element: <SettingsView />,
-  })
+  try {
+    await Navigation.present({
+      element: <SettingsView />,
+    })
+  } catch (error) {
+    // 任何异常都显示出来，避免出现空白界面
+    await Navigation.present({
+      element: <VStack
+        alignment={"leading"}
+        spacing={10}
+        padding={{ horizontal: 20, vertical: 24 }}
+      >
+        <Text
+          font={"headline"}
+          foregroundStyle={"systemRed"}
+        >DeepSeek 余额 · 设置界面出错</Text>
+        <Text
+          font={"footnote"}
+          lineLimit={20}
+        >{error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : `${error}`}</Text>
+      </VStack>,
+    })
+  }
   Script.exit()
 }
 
