@@ -73,3 +73,20 @@ Authorization: Bearer <API_KEY>
 - 小组件的刷新时机由 iOS 的 WidgetKit 决定，最长会有一小时级别的延迟；`⟳` 按钮可强制即时刷新。
 - 「今日消耗」依赖本机每天生成的余额快照，首次使用当天无参考值，会显示 `—`。
 - 余额为按量计费，实际扣费有延迟，与账单页可能略有差异。
+
+## 排查：小组件空白
+
+1. 小组件最底一行会输出状态串，例如 `v2.0 · 更新 19:24 · 3 分钟前`。
+   - 能看到这行 → 脚本已正常渲染，只是没有 Key 或余额为空（中间会写「未设置 API Key」）；
+   - 完全空白 → 先确认主屏小组件「编辑小组件」里选的脚本名确实是本项目。
+2. 用 10 秒最小脚本验证环境（新建一个脚本，只写这两行，加到主屏）：
+
+   ```tsx
+   import { Text, Widget } from "scripting"
+   Widget.present(<Text font={20}>Hello Scripting</Text>)
+   ```
+
+   能显示 = 环境正常，问题在脚本本身；也空白 = 属 Scripting 的小组件配置问题。
+3. v2.0 起 widget.tsx 只用 Text/VStack/HStack/Spacer 排版，并整体包了 try/catch：
+   任何异常都会把错误文字画在小组件上（红色标题 `DeepSeek v2.0 出错`），不会静默白屏。
+4. App 内运行时若界面空白，先看 Scripting 的日志面板；index.tsx 现在也会把异常直接呈现出来。
