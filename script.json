@@ -2,7 +2,7 @@
   "icon": "creditcard.fill",
   "color": "blue",
   "name": "DeepSeek 余额",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Show your DeepSeek API balance on the Home Screen.",
   "localizedNames": {
     "zh": "DeepSeek 余额",
