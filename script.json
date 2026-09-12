@@ -11,5 +11,8 @@
   "localizedDescriptions": {
     "zh": "在主屏幕小组件上查看 DeepSeek API 账户余额、赠送/充值明细与今日消耗。",
     "en": "Track your DeepSeek API balance, granted/top-up breakdown and today's spending on the Home Screen."
+  },
+  "remoteResource": {
+    "url": "https://github.com/zhiaon/scripting-deepseek-balance"
   }
 }
