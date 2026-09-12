@@ -1,3 +1,4 @@
+import * as scriptingNS from "scripting"
 import {
   Button,
   HStack,
@@ -34,11 +35,20 @@ import {
   relativeTime,
   saveApiKey,
   saveConfig,
+  selfTest,
 } from "./balance"
 
+const SCRIPT_VERSION = "1.0.5"
 const BRAND = "#4D6BFE"
 
-// 所有可能抛错的原生读取都包一层，保证界面不会因为读配置/钥匙串失败而白屏
+// Dialog / Pasteboard 在不同版本里可能是全局命名空间，也可能从模块导出，这里都兜住
+const NS: any = scriptingNS as any
+const globalScope: any = globalThis as any
+const DialogAPI: any = NS.Dialog ?? globalScope.Dialog ?? null
+const PasteboardAPI: any = NS.Pasteboard ?? globalScope.Pasteboard ?? null
+
+/* --------------------------- 安全读取封装 --------------------------- */
+
 function safeConfig() {
   try {
     return loadConfig()
@@ -82,6 +92,14 @@ function safeKeychainError(): string {
   }
 }
 
+function safeSelfTest(): string[] {
+  try {
+    return selfTest()
+  } catch (error) {
+    return [`自检本身出错：${error instanceof Error ? error.message : error}`]
+  }
+}
+
 function InfoRow({
   label,
   value,
@@ -97,6 +115,7 @@ function InfoRow({
     <Text
       foregroundStyle={color ?? "secondaryLabel"}
       monospacedDigit
+      lineLimit={1}
     >{value}</Text>
   </HStack>
 }
@@ -110,16 +129,16 @@ function SettingsView() {
   const [keyLabel, setKeyLabel] = useState(safeKeyLabel())
   const [keyBackendLabel, setKeyBackendLabel] = useState(safeBackend())
   const [keyErrorMessage, setKeyErrorMessage] = useState(safeKeychainError())
+
   const [busy, setBusy] = useState(false)
-  const [status, setStatus] = useState("")
+  const [status, setStatus] = useState(`脚本版本 ${SCRIPT_VERSION} · 已就绪`)
   const [tone, setTone] = useState("secondaryLabel")
 
   const [infos, setInfos] = useState<BalanceInfo[]>([])
   const [available, setAvailable] = useState(true)
   const [updatedAt, setUpdatedAt] = useState(0)
-  const [fetchedAt, setFetchedAt] = useState(0)
+  const [diag, setDiag] = useState<string[]>([])
 
-  // 首次进入：先用缓存里的数据渲染，避免白屏
   useEffect(() => {
     const cache = loadCache()
     if (cache != null) {
@@ -135,11 +154,121 @@ function SettingsView() {
     saveConfig(next)
   }
 
+  function syncKeyState() {
+    setKeySaved(safeHasKey())
+    setKeyLabel(safeKeyLabel())
+    setKeyBackendLabel(safeBackend())
+    setKeyErrorMessage(safeKeychainError())
+  }
+
+  function applyKey(rawText: string) {
+    const value = (rawText ?? "").trim()
+    if (value.length === 0) {
+      setStatus("内容为空，没有保存")
+      setTone("systemOrange")
+      return
+    }
+
+    let result
+    try {
+      result = saveApiKey(value)
+    } catch (error) {
+      setStatus(`保存异常：${error instanceof Error ? error.message : error}`)
+      setTone("systemRed")
+      return
+    }
+
+    syncKeyState()
+    setKeyInput("")
+
+    if (result.ok) {
+      setStatus(result.backend === "keychain"
+        ? `已保存（${value.length} 字符）到 iOS 钥匙串`
+        : `已保存（${value.length} 字符）到脚本本地存储 · 钥匙串不可用：${result.error}`)
+      setTone(result.backend === "keychain" ? "systemGreen" : "systemOrange")
+    } else {
+      setStatus(`保存失败：${result.error}`)
+      setTone("systemRed")
+    }
+  }
+
+  async function inputKeyWithDialog() {
+    if (DialogAPI == null || typeof DialogAPI.prompt !== "function") {
+      setStatus("当前版本没有 Dialog.prompt，请改用剪贴板或下面的输入框")
+      setTone("systemOrange")
+      return
+    }
+    try {
+      const text = await DialogAPI.prompt({
+        title: "输入 DeepSeek API Key",
+        message: "以 sk- 开头，只保存在本机",
+        placeholder: "sk-xxxxxxxx",
+        obscureText: true,
+        confirmLabel: "保存",
+        cancelLabel: "取消",
+      })
+      if (text == null) {
+        setStatus("已取消输入")
+        setTone("secondaryLabel")
+        return
+      }
+      applyKey(text)
+    } catch (error) {
+      setStatus(`对话框出错：${error instanceof Error ? error.message : error}`)
+      setTone("systemRed")
+    }
+  }
+
+  async function importKeyFromClipboard() {
+    if (PasteboardAPI == null || typeof PasteboardAPI.getString !== "function") {
+      setStatus("当前版本没有 Pasteboard.getString")
+      setTone("systemOrange")
+      return
+    }
+    try {
+      const text = await PasteboardAPI.getString()
+      if (text == null || `${text}`.trim().length === 0) {
+        setStatus("剪贴板里没有文本（可从其他 App 复制后重试）")
+        setTone("systemOrange")
+        return
+      }
+      applyKey(`${text}`)
+    } catch (error) {
+      setStatus(`读剪贴板出错：${error instanceof Error ? error.message : error}`)
+      setTone("systemRed")
+    }
+  }
+
+  function saveFromField() {
+    applyKey(keyInput)
+  }
+
+  function removeKey() {
+    try {
+      clearApiKey()
+    } catch (error) {
+      // 忽略
+    }
+    syncKeyState()
+    setInfos([])
+    setUpdatedAt(0)
+    setStatus("已清除 API Key")
+    setTone("systemOrange")
+    Widget.reloadAll()
+  }
+
+  function runSelfTest() {
+    const lines = safeSelfTest()
+    setDiag(lines)
+    setStatus("自检完成，结果见下方「自检」")
+    setTone("secondaryLabel")
+  }
+
   async function doRefresh() {
     let key = ""
     try {
       key = getApiKey()
-    } catch (e) {
+    } catch (error) {
       key = ""
     }
     if (!key) {
@@ -155,57 +284,15 @@ function SettingsView() {
       setInfos(result.data.balance_infos)
       setAvailable(result.data.is_available)
       setUpdatedAt(result.updatedAt)
-      setFetchedAt(Date.now())
-      setStatus("已更新")
+      setStatus("余额已更新")
       setTone("systemGreen")
       Widget.reloadAll()
     } catch (error) {
-      setStatus(`${error instanceof Error ? error.message : error}`)
+      setStatus(`刷新失败：${error instanceof Error ? error.message : error}`)
       setTone("systemRed")
     } finally {
       setBusy(false)
     }
-  }
-
-  function syncKeyState() {
-    setKeySaved(safeHasKey())
-    setKeyLabel(safeKeyLabel())
-    setKeyBackendLabel(safeBackend())
-    setKeyErrorMessage(safeKeychainError())
-  }
-
-  function saveKey() {
-    const value = keyInput.trim()
-    if (!value) {
-      setStatus("请输入 API Key")
-      setTone("systemOrange")
-      return
-    }
-
-    const result = saveApiKey(value)
-    syncKeyState()
-    setKeyInput("")
-
-    if (result.ok) {
-      setStatus(result.backend === "keychain"
-        ? "已保存到 iOS 钥匙串"
-        : `已保存到脚本本地存储（钥匙串不可用：${result.error}）`)
-      setTone(result.backend === "keychain" ? "systemGreen" : "systemOrange")
-    } else {
-      setStatus(`保存失败：${result.error}`)
-      setTone("systemRed")
-    }
-  }
-
-  function removeKey() {
-    clearApiKey()
-    syncKeyState()
-    setInfos([])
-    setUpdatedAt(0)
-    setFetchedAt(0)
-    setStatus("已清除 API Key")
-    setTone("systemOrange")
-    Widget.reloadAll()
   }
 
   const primary = infos.length
@@ -225,12 +312,30 @@ function SettingsView() {
       }}
     >
       <Section
+        header={<Text>状态</Text>}
+      >
+        <Text
+          font={"subheadline"}
+          foregroundStyle={tone}
+          lineLimit={6}
+        >{status}</Text>
+        <InfoRow label={"脚本版本"} value={SCRIPT_VERSION} />
+        <InfoRow label={"运行环境"} value={`${Script.env}`} />
+        <InfoRow label={"App 内版本"} value={`${Script.metadata?.version ?? "?"}`} />
+        <Button
+          title={"运行自检（诊断存储/权限）"}
+          systemImage={"stethoscope"}
+          action={runSelfTest}
+        />
+      </Section>
+
+      <Section
         header={<Text>账户</Text>}
       >
         <HStack>
           <VStack alignment={"leading"} spacing={2}>
             <Text
-              font={28}
+              font={26}
               fontWeight={"bold"}
               fontDesign={"rounded"}
               foregroundStyle={BRAND}
@@ -243,8 +348,8 @@ function SettingsView() {
               foregroundStyle={"secondaryLabel"}
             >
               {primary != null
-                ? `${primary.currency} 可用余额 · 赠送 ${symbol}${formatAmount(primary.granted_balance)} · 充值 ${symbol}${formatAmount(primary.topped_up_balance)}`
-                : "暂无数据，点击下方按钮刷新"}
+                ? `${primary.currency} · 赠送 ${symbol}${formatAmount(primary.granted_balance)} · 充值 ${symbol}${formatAmount(primary.topped_up_balance)}`
+                : "暂无数据"}
             </Text>
           </VStack>
           <Spacer />
@@ -264,18 +369,12 @@ function SettingsView() {
 
       <Section
         header={<Text>API Key</Text>}
-        footer={<Text>Key 只写入本机钥匙串（按脚本隔离，其他脚本读不到），请求直接发往 api.deepseek.com，不经过任何第三方服务器。</Text>}
+        footer={<Text>优先写入 iOS 钥匙串；若钥匙串不可用，会自动改用脚本本地存储。</Text>}
       >
         <InfoRow
           label={"当前 Key"}
           value={keyLabel}
           color={keySaved ? "systemGreen" : "systemOrange"}
-        />
-        <SecureField
-          title={"新 Key"}
-          value={keyInput}
-          onChanged={setKeyInput}
-          prompt={"sk-xxxxxxxx"}
         />
         <InfoRow
           label={"存储位置"}
@@ -287,12 +386,29 @@ function SettingsView() {
             font={"footnote"}
             foregroundStyle={"systemOrange"}
             lineLimit={4}
-          >钥匙串不可用：{keyErrorMessage}（已自动改用脚本本地存储）</Text>
+          >钥匙串提示：{keyErrorMessage}</Text>
           : null}
         <Button
-          title={"保存 API Key"}
-          action={saveKey}
-          disabled={keyInput.trim().length === 0}
+          title={"对话框输入 Key"}
+          systemImage={"keyboard"}
+          action={inputKeyWithDialog}
+        />
+        <Button
+          title={"从剪贴板导入 Key"}
+          systemImage={"doc.on.clipboard"}
+          action={importKeyFromClipboard}
+        />
+        <SecureField
+          title={"新 Key"}
+          value={keyInput}
+          onChanged={setKeyInput}
+          prompt={"sk-xxxxxxxx"}
+        />
+        <InfoRow label={"已输入"} value={`${keyInput.trim().length} 字符`} />
+        <Button
+          title={"保存上面输入框里的 Key"}
+          systemImage={"square.and.arrow.down"}
+          action={saveFromField}
         />
         {keySaved
           ? <Button
@@ -305,7 +421,6 @@ function SettingsView() {
 
       <Section
         header={<Text>显示</Text>}
-        footer={<Text>刷新间隔同时决定小组件下一次请求时间线的时间；系统可能因电量等原因延后刷新。</Text>}
       >
         <Picker
           title={"币种"}
@@ -345,7 +460,7 @@ function SettingsView() {
 
       <Section
         header={<Text>小组件</Text>}
-        footer={<Text>{'长按主屏幕小组件 → 编辑小组件 → 选择脚本 “DeepSeek 余额”；参数可填 JSON，例如 {"currency":"USD","refreshMinutes":15}，也可直接填 "CNY"。'}</Text>}
+        footer={<Text>{'主屏长按小组件 → 编辑小组件 → 选脚本 “DeepSeek 余额”；参数可填 {"currency":"USD","refreshMinutes":15}'}</Text>}
       >
         <Button
           title={"预览小尺寸"}
@@ -362,22 +477,26 @@ function SettingsView() {
           }}
         />
         <Button
-          title={"预览大尺寸"}
-          systemImage={"rectangle"}
-          action={async () => {
-            await Widget.preview({ family: "systemLarge" })
-          }}
-        />
-        <Button
           title={"刷新主屏幕小组件"}
           systemImage={"arrow.triangle.2.circlepath"}
           action={() => Widget.reloadAll()}
         />
       </Section>
 
+      {diag.length > 0
+        ? <Section header={<Text>自检</Text>}>
+          {diag.map((line, index) =>
+            <Text
+              key={`${index}`}
+              font={"footnote"}
+              lineLimit={3}
+            >{line}</Text>
+          )}
+        </Section>
+        : null}
+
       <Section
         header={<Text>维护</Text>}
-        footer={<Text>清除缓存只会删除本机保存的余额结果与每日历史，不影响 API Key 和服务端数据。</Text>}
       >
         <Button
           title={"清除余额缓存"}
@@ -386,18 +505,10 @@ function SettingsView() {
             clearCache()
             setInfos([])
             setUpdatedAt(0)
-            setFetchedAt(0)
             setStatus("缓存已清除")
             setTone("systemOrange")
           }}
         />
-      </Section>
-
-      <Section>
-        <Text
-          font={"footnote"}
-          foregroundStyle={tone}
-        >{status.length ? status : `最近一次手动刷新：${fetchedAt ? formatTime(fetchedAt) : "—"}`}</Text>
       </Section>
     </List>
   </NavigationStack>
@@ -409,7 +520,6 @@ async function run() {
       element: <SettingsView />,
     })
   } catch (error) {
-    // 任何异常都显示出来，避免出现空白界面
     await Navigation.present({
       element: <VStack
         alignment={"leading"}
