@@ -18,20 +18,22 @@ import {
 } from "scripting"
 import {
   BalanceInfo,
+  apiKeyBackend,
   clearApiKey,
   clearCache,
   currencySymbol,
   formatAmount,
   formatTime,
   getApiKey,
+  getKeychainError,
   hasApiKey,
   loadCache,
   loadConfig,
   maskApiKey,
   refreshBalance,
   relativeTime,
+  saveApiKey,
   saveConfig,
-  setApiKey,
 } from "./balance"
 
 const BRAND = "#4D6BFE"
@@ -61,6 +63,25 @@ function safeKeyLabel(): string {
   }
 }
 
+function safeBackend(): string {
+  try {
+    const backend = apiKeyBackend()
+    if (backend === "keychain") return "iOS 钥匙串"
+    if (backend === "storage") return "脚本本地存储"
+    return "未存储"
+  } catch (e) {
+    return "未知"
+  }
+}
+
+function safeKeychainError(): string {
+  try {
+    return getKeychainError()
+  } catch (e) {
+    return ""
+  }
+}
+
 function InfoRow({
   label,
   value,
@@ -87,6 +108,8 @@ function SettingsView() {
   const [keyInput, setKeyInput] = useState("")
   const [keySaved, setKeySaved] = useState(safeHasKey())
   const [keyLabel, setKeyLabel] = useState(safeKeyLabel())
+  const [keyBackendLabel, setKeyBackendLabel] = useState(safeBackend())
+  const [keyErrorMessage, setKeyErrorMessage] = useState(safeKeychainError())
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState("")
   const [tone, setTone] = useState("secondaryLabel")
@@ -144,21 +167,39 @@ function SettingsView() {
     }
   }
 
+  function syncKeyState() {
+    setKeySaved(safeHasKey())
+    setKeyLabel(safeKeyLabel())
+    setKeyBackendLabel(safeBackend())
+    setKeyErrorMessage(safeKeychainError())
+  }
+
   function saveKey() {
     const value = keyInput.trim()
-    if (!value) return
-    const ok = setApiKey(value)
-    setKeySaved(ok)
-    setKeyLabel(safeKeyLabel())
+    if (!value) {
+      setStatus("请输入 API Key")
+      setTone("systemOrange")
+      return
+    }
+
+    const result = saveApiKey(value)
+    syncKeyState()
     setKeyInput("")
-    setStatus(ok ? "API Key 已保存到钥匙串" : "保存失败")
-    setTone(ok ? "systemGreen" : "systemRed")
+
+    if (result.ok) {
+      setStatus(result.backend === "keychain"
+        ? "已保存到 iOS 钥匙串"
+        : `已保存到脚本本地存储（钥匙串不可用：${result.error}）`)
+      setTone(result.backend === "keychain" ? "systemGreen" : "systemOrange")
+    } else {
+      setStatus(`保存失败：${result.error}`)
+      setTone("systemRed")
+    }
   }
 
   function removeKey() {
     clearApiKey()
-    setKeySaved(false)
-    setKeyLabel(safeKeyLabel())
+    syncKeyState()
     setInfos([])
     setUpdatedAt(0)
     setFetchedAt(0)
@@ -236,6 +277,18 @@ function SettingsView() {
           onChanged={setKeyInput}
           prompt={"sk-xxxxxxxx"}
         />
+        <InfoRow
+          label={"存储位置"}
+          value={keyBackendLabel}
+          color={keySaved ? "systemGreen" : "systemOrange"}
+        />
+        {keyErrorMessage.length > 0
+          ? <Text
+            font={"footnote"}
+            foregroundStyle={"systemOrange"}
+            lineLimit={4}
+          >钥匙串不可用：{keyErrorMessage}（已自动改用脚本本地存储）</Text>
+          : null}
         <Button
           title={"保存 API Key"}
           action={saveKey}
