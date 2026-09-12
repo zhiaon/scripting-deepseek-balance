@@ -1,6 +1,6 @@
 {
   "name": "DeepSeek 余额",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "DeepSeek API balance widget",
   "entry": "index.tsx",
   "runInApp": false,
