@@ -1,4 +1,21 @@
-import { Keychain, Storage } from "scripting"
+import { Keychain as KeychainModule, Storage as StorageModule } from "scripting"
+
+/**
+ * 兼容层：不同版本的 Scripting 里，Keychain / Storage 既可能是全局命名空间，
+ * 也可能从 'scripting' 导出。这里两种都兜住，避免出现 undefined 导致的静默失败。
+ */
+const globalScope: any = globalThis as any
+
+const KeychainAPI: any = globalScope.Keychain ?? KeychainModule ?? null
+const StorageAPI: any = globalScope.Storage ?? StorageModule ?? null
+
+export function keychainAvailable(): boolean {
+  return KeychainAPI != null && typeof KeychainAPI.get === "function"
+}
+
+export function storageAvailable(): boolean {
+  return StorageAPI != null && typeof StorageAPI.get === "function"
+}
 
 /**
  * DeepSeek 余额数据层
@@ -65,12 +82,12 @@ export const DEFAULT_CONFIG: Config = {
 /* ------------------------------- 配置 ------------------------------- */
 
 export function loadConfig(): Config {
-  const saved = Storage.get<Partial<Config>>(CONFIG_KEY) ?? {}
+  const saved = storeRead<Partial<Config>>(CONFIG_KEY) ?? {}
   return { ...DEFAULT_CONFIG, ...saved }
 }
 
 export function saveConfig(config: Config): boolean {
-  return Storage.set(CONFIG_KEY, config)
+  return storeWrite(CONFIG_KEY, config)
 }
 
 /** 解析小组件参数：支持 {"currency":"CNY"} 这种 JSON，也支持直接写 "CNY" */
@@ -88,11 +105,76 @@ export function parseWidgetOptions(raw: string | null | undefined): WidgetOption
   return { currency: text }
 }
 
+/* --------------------------- 存储兼容封装 --------------------------- */
+
+function storeRead<T>(key: string): T | null {
+  if (!storageAvailable()) return null
+  try {
+    const value = StorageAPI.get(key)
+    return (value ?? null) as T | null
+  } catch (error) {
+    return null
+  }
+}
+
+function storeWrite(key: string, value: any): boolean {
+  if (!storageAvailable()) return false
+  try {
+    return StorageAPI.set(key, value) !== false
+  } catch (error) {
+    return false
+  }
+}
+
+function storeErase(key: string): void {
+  if (!storageAvailable()) return
+  try {
+    StorageAPI.remove(key)
+  } catch (error) {
+    // 忽略
+  }
+}
+
+function kcRead(key: string): { ok: boolean; value: string; error: string } {
+  if (!keychainAvailable()) {
+    return { ok: false, value: "", error: "Keychain 不可用（该版本未提供该模块）" }
+  }
+  try {
+    const value = KeychainAPI.get(key)
+    if (typeof value === "string") return { ok: true, value: value.trim(), error: "" }
+    return { ok: true, value: "", error: "" }
+  } catch (error) {
+    return { ok: false, value: "", error: error instanceof Error ? error.message : `${error}` }
+  }
+}
+
+function kcWrite(key: string, value: string): { ok: boolean; error: string } {
+  if (!keychainAvailable()) {
+    return { ok: false, error: "Keychain 不可用（该版本未提供该模块）" }
+  }
+  try {
+    const result = KeychainAPI.set(key, value)
+    return result === false ? { ok: false, error: "Keychain.set 返回 false" } : { ok: true, error: "" }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : `${error}` }
+  }
+}
+
+function kcErase(key: string): boolean {
+  if (!keychainAvailable()) return false
+  try {
+    KeychainAPI.remove(key)
+    return true
+  } catch (error) {
+    return false
+  }
+}
+
 /* ------------------------------ API Key ----------------------------- */
 
 /**
- * 凭据存储：优先 iOS Keychain；若 Keychain 不可用（部分环境会抛错或返回 false），
- * 自动退回脚本私有 Storage，保证一定存得进去。两条路径都不向外抛异常。
+ * 凭据存储：优先 Keychain；Keychain 不可用（模块缺失 / 抛错 / 返回 false）时
+ * 自动退回脚本私有 Storage。所有路径都不向外抛异常。
  */
 
 const STORAGE_KEY_ITEM = "deepseek.api_key.storage"
@@ -109,40 +191,21 @@ export function getKeychainError(): string {
   return keychainError
 }
 
-function keychainGet(): string {
-  try {
-    const value = Keychain.get(API_KEY_ITEM)
-    if (typeof value === "string") {
-      keychainError = ""
-      return value.trim()
-    }
-    keychainError = "Keychain.get 返回空"
-    return ""
-  } catch (error) {
-    keychainError = error instanceof Error ? error.message : `${error}`
-    return ""
-  }
-}
-
-function storageGet(): string {
-  try {
-    const value = Storage.get<string>(STORAGE_KEY_ITEM)
-    return typeof value === "string" ? value.trim() : ""
-  } catch (error) {
-    return ""
-  }
-}
-
 export function getApiKey(): string {
-  const fromKeychain = keychainGet()
-  if (fromKeychain.length > 0) return fromKeychain
-  return storageGet()
+  const fromKeychain = kcRead(API_KEY_ITEM)
+  if (!fromKeychain.ok) keychainError = fromKeychain.error
+  else keychainError = ""
+  if (fromKeychain.value.length > 0) return fromKeychain.value
+
+  const fromStorage = storeRead<string>(STORAGE_KEY_ITEM)
+  return typeof fromStorage === "string" ? fromStorage.trim() : ""
 }
 
 /** 当前 Key 存在哪里（用于设置页展示） */
 export function apiKeyBackend(): "keychain" | "storage" | "none" {
-  if (keychainGet().length > 0) return "keychain"
-  if (storageGet().length > 0) return "storage"
+  if (kcRead(API_KEY_ITEM).value.length > 0) return "keychain"
+  const fromStorage = storeRead<string>(STORAGE_KEY_ITEM)
+  if (typeof fromStorage === "string" && fromStorage.trim().length > 0) return "storage"
   return "none"
 }
 
@@ -152,34 +215,18 @@ export function saveApiKey(key: string): SaveKeyResult {
     return { ok: false, backend: "none", error: "内容为空" }
   }
 
-  let error = ""
-  try {
-    if (Keychain.set(API_KEY_ITEM, value)) {
-      keychainError = ""
-      try {
-        Storage.remove(STORAGE_KEY_ITEM)
-      } catch (e) {
-        // 忽略
-      }
-      return { ok: true, backend: "keychain", error: "" }
-    }
-    error = "Keychain.set 返回 false"
-    keychainError = error
-  } catch (e) {
-    error = e instanceof Error ? e.message : `${e}`
-    keychainError = error
+  const written = kcWrite(API_KEY_ITEM, value)
+  if (written.ok) {
+    keychainError = ""
+    storeErase(STORAGE_KEY_ITEM)
+    return { ok: true, backend: "keychain", error: "" }
   }
+  keychainError = written.error
 
-  try {
-    if (Storage.set(STORAGE_KEY_ITEM, value)) {
-      return { ok: true, backend: "storage", error }
-    }
-    error = `${error} / Storage.set 返回 false`
-  } catch (e) {
-    error = `${error} / ${e}`
+  if (storeWrite(STORAGE_KEY_ITEM, value)) {
+    return { ok: true, backend: "storage", error: written.error }
   }
-
-  return { ok: false, backend: "none", error }
+  return { ok: false, backend: "none", error: `${written.error} / 本地存储写入也失败` }
 }
 
 /** 兼容旧调用：只关心成功与否 */
@@ -188,23 +235,40 @@ export function setApiKey(key: string): boolean {
 }
 
 export function clearApiKey(): boolean {
-  let ok = false
-  try {
-    ok = Keychain.remove(API_KEY_ITEM)
-  } catch (e) {
-    ok = false
-  }
-  try {
-    Storage.remove(STORAGE_KEY_ITEM)
-    ok = true
-  } catch (e) {
-    // 忽略
-  }
+  const ok = kcErase(API_KEY_ITEM)
+  storeErase(STORAGE_KEY_ITEM)
   return ok
 }
 
 export function hasApiKey(): boolean {
   return getApiKey().length > 0
+}
+
+/** 运行时自检：把每个环节的真实结果吐出来，便于定位问题 */
+export function selfTest(): string[] {
+  const lines: string[] = []
+  lines.push(`Keychain 模块：${keychainAvailable() ? "可用" : "不可用"}`)
+  lines.push(`Storage 模块：${storageAvailable() ? "可用" : "不可用"}`)
+
+  const probe = `probe.${Date.now()}`
+  const written = kcWrite(probe, "1")
+  lines.push(`Keychain.set：${written.ok ? "成功" : `失败（${written.error}）`}`)
+  if (written.ok) {
+    const read = kcRead(probe)
+    lines.push(`Keychain.get：${read.ok ? (read.value === "1" ? "成功" : `异常返回（${read.value}）`) : `失败（${read.error}）`}`)
+    kcErase(probe)
+  }
+
+  const storeOk = storeWrite(probe, "1")
+  lines.push(`Storage.set：${storeOk ? "成功" : "失败"}`)
+  const storeBack = storeRead<string>(probe)
+  lines.push(`Storage.get：${storeBack === "1" ? "成功" : (storeBack == null ? "失败" : `异常返回（${storeBack}）`)}`)
+  storeErase(probe)
+
+  const backend = apiKeyBackend()
+  lines.push(`当前 Key 存储位置：${backend === "keychain" ? "钥匙串" : backend === "storage" ? "本地存储" : "无"}`)
+  if (keychainError.length > 0) lines.push(`最近钥匙串错误：${keychainError}`)
+  return lines
 }
 
 /* ------------------------------ 网络请求 ----------------------------- */
@@ -253,18 +317,18 @@ export async function refreshBalance(
 /* ------------------------------- 缓存 ------------------------------- */
 
 export function loadCache(): Cache | null {
-  const cache = Storage.get<Cache>(CACHE_KEY)
+  const cache = storeRead<Cache>(CACHE_KEY)
   if (cache == null || !Array.isArray(cache.infos)) return null
   return cache
 }
 
 export function saveCache(cache: Cache): boolean {
-  return Storage.set(CACHE_KEY, cache)
+  return storeWrite(CACHE_KEY, cache)
 }
 
 export function clearCache(): void {
-  Storage.remove(CACHE_KEY)
-  Storage.remove(HISTORY_KEY)
+  storeErase(CACHE_KEY)
+  storeErase(HISTORY_KEY)
 }
 
 /* ------------------------------ 历史记录 ----------------------------- */
@@ -278,7 +342,7 @@ export function todayKey(): string {
 
 /** 记录每天的首次/最新余额，用于估算“今日消耗” */
 export function recordHistory(infos: BalanceInfo[]): History {
-  const history = Storage.get<History>(HISTORY_KEY) ?? {}
+  const history = storeRead<History>(HISTORY_KEY) ?? {}
   const total = primaryTotal(infos)
   if (total == null) return history
 
@@ -296,12 +360,12 @@ export function recordHistory(infos: BalanceInfo[]): History {
     if (oldest != null) delete history[oldest]
   }
 
-  Storage.set(HISTORY_KEY, history)
+  storeWrite(HISTORY_KEY, history)
   return history
 }
 
 export function loadHistory(): History {
-  return Storage.get<History>(HISTORY_KEY) ?? {}
+  return storeRead<History>(HISTORY_KEY) ?? {}
 }
 
 /**
