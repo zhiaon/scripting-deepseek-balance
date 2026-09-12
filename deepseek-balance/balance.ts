@@ -90,19 +90,117 @@ export function parseWidgetOptions(raw: string | null | undefined): WidgetOption
 
 /* ------------------------------ API Key ----------------------------- */
 
-export function getApiKey(): string {
-  const key = Keychain.get(API_KEY_ITEM)
-  return typeof key === "string" ? key.trim() : ""
+/**
+ * 凭据存储：优先 iOS Keychain；若 Keychain 不可用（部分环境会抛错或返回 false），
+ * 自动退回脚本私有 Storage，保证一定存得进去。两条路径都不向外抛异常。
+ */
+
+const STORAGE_KEY_ITEM = "deepseek.api_key.storage"
+
+export type SaveKeyResult = {
+  ok: boolean
+  backend: "keychain" | "storage" | "none"
+  error: string
 }
 
-export function setApiKey(key: string): boolean {
+let keychainError = ""
+
+export function getKeychainError(): string {
+  return keychainError
+}
+
+function keychainGet(): string {
+  try {
+    const value = Keychain.get(API_KEY_ITEM)
+    if (typeof value === "string") {
+      keychainError = ""
+      return value.trim()
+    }
+    keychainError = "Keychain.get 返回空"
+    return ""
+  } catch (error) {
+    keychainError = error instanceof Error ? error.message : `${error}`
+    return ""
+  }
+}
+
+function storageGet(): string {
+  try {
+    const value = Storage.get<string>(STORAGE_KEY_ITEM)
+    return typeof value === "string" ? value.trim() : ""
+  } catch (error) {
+    return ""
+  }
+}
+
+export function getApiKey(): string {
+  const fromKeychain = keychainGet()
+  if (fromKeychain.length > 0) return fromKeychain
+  return storageGet()
+}
+
+/** 当前 Key 存在哪里（用于设置页展示） */
+export function apiKeyBackend(): "keychain" | "storage" | "none" {
+  if (keychainGet().length > 0) return "keychain"
+  if (storageGet().length > 0) return "storage"
+  return "none"
+}
+
+export function saveApiKey(key: string): SaveKeyResult {
   const value = key.trim()
-  if (!value) return false
-  return Keychain.set(API_KEY_ITEM, value)
+  if (value.length === 0) {
+    return { ok: false, backend: "none", error: "内容为空" }
+  }
+
+  let error = ""
+  try {
+    if (Keychain.set(API_KEY_ITEM, value)) {
+      keychainError = ""
+      try {
+        Storage.remove(STORAGE_KEY_ITEM)
+      } catch (e) {
+        // 忽略
+      }
+      return { ok: true, backend: "keychain", error: "" }
+    }
+    error = "Keychain.set 返回 false"
+    keychainError = error
+  } catch (e) {
+    error = e instanceof Error ? e.message : `${e}`
+    keychainError = error
+  }
+
+  try {
+    if (Storage.set(STORAGE_KEY_ITEM, value)) {
+      return { ok: true, backend: "storage", error }
+    }
+    error = `${error} / Storage.set 返回 false`
+  } catch (e) {
+    error = `${error} / ${e}`
+  }
+
+  return { ok: false, backend: "none", error }
+}
+
+/** 兼容旧调用：只关心成功与否 */
+export function setApiKey(key: string): boolean {
+  return saveApiKey(key).ok
 }
 
 export function clearApiKey(): boolean {
-  return Keychain.remove(API_KEY_ITEM)
+  let ok = false
+  try {
+    ok = Keychain.remove(API_KEY_ITEM)
+  } catch (e) {
+    ok = false
+  }
+  try {
+    Storage.remove(STORAGE_KEY_ITEM)
+    ok = true
+  } catch (e) {
+    // 忽略
+  }
+  return ok
 }
 
 export function hasApiKey(): boolean {
