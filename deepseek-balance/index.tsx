@@ -1,4 +1,3 @@
-import * as scriptingNS from "scripting"
 import {
   Button,
   HStack,
@@ -38,14 +37,31 @@ import {
   selfTest,
 } from "./balance"
 
-const SCRIPT_VERSION = "1.0.6"
+const SCRIPT_VERSION = "1.0.7"
 const BRAND = "#4D6BFE"
 
-// Dialog / Pasteboard 在不同版本里可能是全局命名空间，也可能从模块导出，这里都兜住
-const NS: any = scriptingNS as any
+// Dialog / Pasteboard 与官方示例一致：作为全局命名空间使用，用 typeof 保护后再取用
+declare const Dialog: any
+declare const Pasteboard: any
+
 const globalScope: any = globalThis as any
-const DialogAPI: any = NS.Dialog ?? globalScope.Dialog ?? null
-const PasteboardAPI: any = NS.Pasteboard ?? globalScope.Pasteboard ?? null
+
+function resolveGlobalAPI(name: string): any {
+  try {
+    if (name === "Dialog") {
+      return typeof Dialog !== "undefined" ? Dialog : globalScope.Dialog
+    }
+    if (name === "Pasteboard") {
+      return typeof Pasteboard !== "undefined" ? Pasteboard : globalScope.Pasteboard
+    }
+  } catch (error) {
+    return globalScope[name] ?? null
+  }
+  return globalScope[name] ?? null
+}
+
+const DialogAPI: any = resolveGlobalAPI("Dialog") ?? null
+const PasteboardAPI: any = resolveGlobalAPI("Pasteboard") ?? null
 
 /* --------------------------- 安全读取封装 --------------------------- */
 
