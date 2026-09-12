@@ -183,6 +183,10 @@ export type SaveKeyResult = {
   ok: boolean
   backend: "keychain" | "storage" | "none"
   error: string
+  /** 写入后回读校验是否一致 */
+  verified: boolean
+  masked: string
+  length: number
 }
 
 let keychainError = ""
@@ -212,21 +216,44 @@ export function apiKeyBackend(): "keychain" | "storage" | "none" {
 export function saveApiKey(key: string): SaveKeyResult {
   const value = key.trim()
   if (value.length === 0) {
-    return { ok: false, backend: "none", error: "内容为空" }
+    return { ok: false, backend: "none", error: "内容为空", verified: false, masked: "", length: 0 }
   }
 
   const written = kcWrite(API_KEY_ITEM, value)
   if (written.ok) {
     keychainError = ""
     storeErase(STORAGE_KEY_ITEM)
-    return { ok: true, backend: "keychain", error: "" }
+    const readBack = kcRead(API_KEY_ITEM)
+    return {
+      ok: true,
+      backend: "keychain",
+      error: "",
+      verified: readBack.ok && readBack.value === value,
+      masked: maskApiKey(value),
+      length: value.length,
+    }
   }
   keychainError = written.error
 
   if (storeWrite(STORAGE_KEY_ITEM, value)) {
-    return { ok: true, backend: "storage", error: written.error }
+    const readBack = storeRead<string>(STORAGE_KEY_ITEM)
+    return {
+      ok: true,
+      backend: "storage",
+      error: written.error,
+      verified: typeof readBack === "string" && readBack.trim() === value,
+      masked: maskApiKey(value),
+      length: value.length,
+    }
   }
-  return { ok: false, backend: "none", error: `${written.error} / 本地存储写入也失败` }
+  return {
+    ok: false,
+    backend: "none",
+    error: `${written.error} / 本地存储写入也失败`,
+    verified: false,
+    masked: "",
+    length: value.length,
+  }
 }
 
 /** 兼容旧调用：只关心成功与否 */
