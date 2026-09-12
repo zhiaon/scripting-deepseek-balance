@@ -38,7 +38,7 @@ import {
   selfTest,
 } from "./balance"
 
-const SCRIPT_VERSION = "1.0.5"
+const SCRIPT_VERSION = "1.0.6"
 const BRAND = "#4D6BFE"
 
 // Dialog / Pasteboard 在不同版本里可能是全局命名空间，也可能从模块导出，这里都兜住
@@ -138,6 +138,8 @@ function SettingsView() {
   const [available, setAvailable] = useState(true)
   const [updatedAt, setUpdatedAt] = useState(0)
   const [diag, setDiag] = useState<string[]>([])
+  const [toastText, setToastText] = useState("")
+  const [showToast, setShowToast] = useState(false)
 
   useEffect(() => {
     const cache = loadCache()
@@ -169,26 +171,50 @@ function SettingsView() {
       return
     }
 
+    setStatus("正在保存…")
+    setTone("secondaryLabel")
+
     let result
     try {
       result = saveApiKey(value)
     } catch (error) {
-      setStatus(`保存异常：${error instanceof Error ? error.message : error}`)
+      const message = `保存异常：${error instanceof Error ? error.message : error}`
+      setStatus(message)
       setTone("systemRed")
+      setToastText(message)
+      setShowToast(true)
       return
     }
 
     syncKeyState()
     setKeyInput("")
 
-    if (result.ok) {
-      setStatus(result.backend === "keychain"
-        ? `已保存（${value.length} 字符）到 iOS 钥匙串`
-        : `已保存（${value.length} 字符）到脚本本地存储 · 钥匙串不可用：${result.error}`)
-      setTone(result.backend === "keychain" ? "systemGreen" : "systemOrange")
-    } else {
-      setStatus(`保存失败：${result.error}`)
-      setTone("systemRed")
+    const backendText = result.backend === "keychain" ? "iOS 钥匙串（系统加密）"
+      : result.backend === "storage" ? "脚本本地存储（明文，仅本机沙盒）"
+        : "未写入"
+
+    const detail = result.ok
+      ? `结果：保存成功${result.verified ? "（回读校验通过）" : "（⚠️ 回读校验不一致）"}\n存储位置：${backendText}\nKey：${result.masked}（${result.length} 字符）${result.error.length > 0 ? `\n说明：钥匙串不可用 —— ${result.error}` : ""}`
+      : `结果：保存失败\n原因：${result.error}`
+
+    setStatus(detail.replace(/\n/g, " · "))
+    setTone(result.ok ? (result.backend === "keychain" ? "systemGreen" : "systemOrange") : "systemRed")
+    setToastText(result.ok
+      ? `✅ 已保存到${result.backend === "keychain" ? "钥匙串" : "本地存储"}`
+      : `❌ 保存失败`)
+    setShowToast(true)
+
+    if (DialogAPI != null && typeof DialogAPI.alert === "function") {
+      try {
+        DialogAPI.alert({
+          title: result.ok ? "API Key 已保存" : "API Key 保存失败",
+          message: detail,
+        }).catch(() => {
+          // 忽略
+        })
+      } catch (error) {
+        // 忽略
+      }
     }
   }
 
@@ -304,6 +330,13 @@ function SettingsView() {
     <List
       navigationTitle={"DeepSeek 余额"}
       navigationBarTitleDisplayMode={"inline"}
+      toast={{
+        isPresented: showToast,
+        onChanged: setShowToast,
+        message: toastText,
+        duration: 2.5,
+        position: "top",
+      }}
       toolbar={{
         cancellationAction: <Button
           title={"完成"}
@@ -369,7 +402,7 @@ function SettingsView() {
 
       <Section
         header={<Text>API Key</Text>}
-        footer={<Text>优先写入 iOS 钥匙串；若钥匙串不可用，会自动改用脚本本地存储。</Text>}
+        footer={<Text>钥匙串（Keychain）里的 Key 由 iOS 加密保管、不随备份同步；若该环境不支持钥匙串，会自动退回脚本本地存储（App 沙盒内的明文，仅本机可读）。两种方式都不会把 Key 发送给除 api.deepseek.com 以外的任何服务器。</Text>}
       >
         <InfoRow
           label={"当前 Key"}
