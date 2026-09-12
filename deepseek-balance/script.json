@@ -1,0 +1,25 @@
+{
+  "name": "DeepSeek 余额",
+  "version": "1.0.3",
+  "description": "DeepSeek API balance widget",
+  "entry": "index.tsx",
+  "runInApp": false,
+  "icon": "creditcard.fill",
+  "color": "blue",
+  "iconImage": null,
+  "intentInputTypes": [],
+  "author": {
+    "name": "zhiaon",
+    "homepage": "https://github.com/zhiaon"
+  },
+  "contributors": [],
+  "remoteResource": "https://raw.githubusercontent.com/zhiaon/scripting-deepseek-balance/main/deepseek-balance.zip",
+  "localizedNames": {
+    "zh": "DeepSeek 余额",
+    "en": "DeepSeek Balance"
+  },
+  "localizedDescriptions": {
+    "zh": "在主屏幕小组件上查看 DeepSeek API 账户余额、赠送/充值明细与今日消耗。",
+    "en": "Track your DeepSeek API balance, granted/top-up breakdown and today's spending on the Home Screen."
+  }
+}
