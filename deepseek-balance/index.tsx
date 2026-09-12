@@ -37,7 +37,7 @@ import {
   selfTest,
 } from "./balance"
 
-const SCRIPT_VERSION = "1.0.7"
+const SCRIPT_VERSION = "1.0.8"
 const BRAND = "#4D6BFE"
 
 // Dialog / Pasteboard 与官方示例一致：作为全局命名空间使用，用 typeof 保护后再取用
