@@ -106,7 +106,7 @@ export function saveConfig(config: Config): boolean {
   return storeWrite(CONFIG_KEY, config)
 }
 
-/** 解析小组件参数：支持 {"currency":"CNY"} 这种 JSON，也支持直接写 "CNY" */
+/** 解析小组件参数：{"currency":"CNY"} / 纯币种 "CNY" / 纯 Key "sk-xxx" 都支持 */
 export function parseWidgetOptions(raw: string | null | undefined): WidgetOptions {
   const text = (raw ?? "").trim()
   if (!text) return {}
@@ -118,6 +118,7 @@ export function parseWidgetOptions(raw: string | null | undefined): WidgetOption
       return {}
     }
   }
+  if (text.startsWith("sk-")) return { apiKey: text }
   return { currency: text }
 }
 
