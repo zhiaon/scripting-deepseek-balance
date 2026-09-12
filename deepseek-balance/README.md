@@ -24,7 +24,13 @@
 | `balance.ts` | 数据层：配置、Keychain、`/user/balance` 请求、缓存、每日历史与格式化 |
 | `tools/` | 仅本地自检用的 stub 与解析脚本，可不上传到 Scripting |
 
-## 安装
+## 一键安装（Scripting）
+
+```
+scripting://import_scripts?urls=%5B%22https%3A%2F%2Fraw.githubusercontent.com%2Fzhiaon%2Fscripting-deepseek-balance%2Fmain%2Fdeepseek-balance.zip%22%5D
+```
+
+## 手动安装
 
 1. 在 Scripting App 里新建一个脚本项目，名称填 **DeepSeek 余额**（名称要和 `script.json` 里一致，URL Scheme 会用到）。
 2. 依次新建文件并粘贴内容：`script.json`、`balance.ts`、`widget.tsx`、`app_intents.tsx`、`index.tsx`。
