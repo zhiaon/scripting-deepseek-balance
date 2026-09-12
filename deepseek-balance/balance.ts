@@ -1,13 +1,29 @@
-import { Keychain as KeychainModule, Storage as StorageModule } from "scripting"
+declare const Keychain: any
+declare const Storage: any
 
 /**
- * 兼容层：不同版本的 Scripting 里，Keychain / Storage 既可能是全局命名空间，
- * 也可能从 'scripting' 导出。这里两种都兜住，避免出现 undefined 导致的静默失败。
+ * 兼容层：官方示例里 Keychain / Storage 是全局命名空间（不 import）。
+ * 这里用 declare + typeof 保护的方式取用，既不会因缺少导出而报错，
+ * 也不会因 undefined 而静默失败。
  */
 const globalScope: any = globalThis as any
 
-const KeychainAPI: any = globalScope.Keychain ?? KeychainModule ?? null
-const StorageAPI: any = globalScope.Storage ?? StorageModule ?? null
+function resolveAPI(name: string): any {
+  try {
+    if (name === "Keychain") {
+      return typeof Keychain !== "undefined" ? Keychain : globalScope.Keychain
+    }
+    if (name === "Storage") {
+      return typeof Storage !== "undefined" ? Storage : globalScope.Storage
+    }
+  } catch (error) {
+    return globalScope[name] ?? null
+  }
+  return globalScope[name] ?? null
+}
+
+const KeychainAPI: any = resolveAPI("Keychain") ?? null
+const StorageAPI: any = resolveAPI("Storage") ?? null
 
 export function keychainAvailable(): boolean {
   return KeychainAPI != null && typeof KeychainAPI.get === "function"
